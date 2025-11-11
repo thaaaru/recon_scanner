@@ -1,0 +1,78 @@
+# Extended Dockerfile with full recon_scanner Python toolkit
+FROM debian:bookworm-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+ENV TOR_TIMEOUT_SECS=60 \
+    LEAK_TEST_URL="https://ipinfo.io/ip" \
+    RESULTS_DIR="/results" \
+    PATH="/usr/local/bin:${PATH}" \
+    GOPATH="/home/scanner/go"
+
+# Install system packages + Python + Go
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tor \
+    proxychains4 \
+    nmap \
+    curl \
+    wget \
+    dnsutils \
+    netcat-openbsd \
+    iproute2 \
+    ca-certificates \
+    # Python and build tools
+    python3 \
+    python3-pip \
+    python3-dev \
+    # Go for Amass/Assetfinder
+    golang-go \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash scanner && \
+    mkdir -p /results /home/scanner/.tor /home/scanner/go && \
+    chown -R scanner:scanner /results /home/scanner
+
+# Switch to scanner user for Go tool installation
+USER scanner
+WORKDIR /home/scanner
+
+# Install Go-based reconnaissance tools
+RUN export PATH=$PATH:/usr/lib/go-1.19/bin:$GOPATH/bin && \
+    go install -v github.com/OWASP/Amass/v3/...@master && \
+    go install -v github.com/tomnomnom/assetfinder@latest
+
+# Install Python dependencies
+COPY --chown=scanner:scanner requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir --user -r /tmp/requirements.txt
+
+# Copy Python recon scanner
+COPY --chown=scanner:scanner recon.py /home/scanner/recon.py
+COPY --chown=scanner:scanner api_keys.txt /home/scanner/api_keys.txt
+
+# Switch back to root for system configuration
+USER root
+
+# Copy Docker-specific configurations
+COPY --chown=scanner:scanner proxychains.conf /etc/proxychains4.conf
+COPY --chown=scanner:scanner --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=scanner:scanner --chmod=755 check_leak.sh /usr/local/bin/check_leak.sh
+COPY --chown=scanner:scanner --chmod=755 scan_wrapper.sh /usr/local/bin/scan_wrapper.sh
+
+# Configure Tor
+RUN echo "DataDirectory /home/scanner/.tor" >> /etc/tor/torrc && \
+    echo "SOCKSPort 127.0.0.1:9050" >> /etc/tor/torrc && \
+    echo "Log notice stdout" >> /etc/tor/torrc && \
+    chown -R scanner:scanner /etc/tor /var/log/tor /var/lib/tor
+
+# Final user switch
+USER scanner
+WORKDIR /home/scanner
+
+EXPOSE 0
+HEALTHCHECK NONE
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["--help"]

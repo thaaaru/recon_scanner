@@ -1,0 +1,84 @@
+# API Keys Configuration
+# Copy this file to api_keys.txt and add your actual API keys
+# WARNING: Never commit api_keys.txt to version control!
+
+# ============================================
+# Security Trails API
+# ============================================
+# Get your API key from: https://securitytrails.com/app/account/credentials
+# Used for: Enhanced subdomain enumeration, historical DNS data
+# Free tier: 50 queries/month
+SECURITY_TRAILS_API_KEY=your_securitytrails_api_key_here
+
+# ============================================
+# VirusTotal API
+# ============================================
+# Get your API key from: https://www.virustotal.com/gui/my-apikey
+# Used for: URL/file scanning, malware detection
+# Free tier: 4 requests/minute, 500 requests/day
+VIRUSTOTAL_API_KEY=your_virustotal_api_key_here
+
+# ============================================
+# Shodan API (Optional - not yet implemented)
+# ============================================
+# Get your API key from: https://account.shodan.io/
+# Used for: IP/port intelligence, service detection
+# Free tier: Limited queries
+# SHODAN_API_KEY=your_shodan_api_key_here
+
+# ============================================
+# Censys API (Optional - not yet implemented)
+# ============================================
+# Get your API ID and Secret from: https://censys.io/account/api
+# Used for: Certificate search, subdomain discovery
+# Free tier: 250 queries/month
+# CENSYS_API_ID=your_censys_api_id_here
+# CENSYS_API_SECRET=your_censys_api_secret_here
+
+# ============================================
+# Usage Instructions
+# ============================================
+#
+# 1. Copy this file:
+#    cp api_keys.txt.example api_keys.txt
+#
+# 2. Add your actual API keys above (replace "your_*_key_here")
+#
+# 3. Verify api_keys.txt is in .gitignore:
+#    grep -q "api_keys.txt" .gitignore && echo "✓ Protected" || echo "✗ NOT PROTECTED!"
+#
+# 4. Test configuration:
+#    python3 -c "from recon import APIKeyManager; print(APIKeyManager.load_api_keys())"
+#
+# ============================================
+# Security Notes
+# ============================================
+#
+# - Keep this file private and secure
+# - Rotate keys regularly
+# - Use environment variables in production:
+#   export SECURITY_TRAILS_API_KEY="your_key"
+#   export VIRUSTOTAL_API_KEY="your_key"
+#
+# - Never share keys or commit to version control
+# - Revoke compromised keys immediately
+# - Monitor API usage for anomalies
+#
+# ============================================
+# Free Tier Limitations
+# ============================================
+#
+# SecurityTrails (Free):
+#   - 50 API calls/month
+#   - Historical data limited
+#   - No bulk operations
+#
+# VirusTotal (Free):
+#   - 4 requests/minute
+#   - 500 requests/day
+#   - No automated scanning
+#   - Public scans visible to community
+#
+# For production use, consider paid plans
+#
+# ============================================

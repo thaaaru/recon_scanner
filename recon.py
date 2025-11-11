@@ -48,6 +48,9 @@ SOCKET_TIMEOUT = 2 if ARCH.startswith('arm') else 1
 BATCH_SIZE = 50 if ARCH.startswith('arm') else 100
 DNS_TIMEOUT = 5
 
+# Global proxy state
+USE_PROXY = False
+
 class APIKeyManager:
     @staticmethod
     def load_api_keys(file_path='api_keys.txt'):
@@ -63,6 +66,163 @@ class APIKeyManager:
             print(f"[-] {file_path} not found. Create the file and add API keys.")
         return api_keys
 
+class ProxyManager:
+    """Manages proxychains and Tor configuration for anonymous scanning"""
+
+    @staticmethod
+    def check_proxychains():
+        """Check if proxychains is installed and available"""
+        proxychains_variants = ['proxychains4', 'proxychains']
+        for variant in proxychains_variants:
+            if shutil.which(variant):
+                return variant
+        return None
+
+    @staticmethod
+    def check_tor():
+        """Check if Tor service is running"""
+        try:
+            result = subprocess.run(
+                ['systemctl', 'is-active', 'tor'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.stdout.strip() == 'active'
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # Try alternative method - check if port 9050 is listening
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2)
+                result = sock.connect_ex(('127.0.0.1', 9050))
+                sock.close()
+                return result == 0
+            except:
+                return False
+
+    @staticmethod
+    def test_proxy_connection():
+        """Test if proxy connection is working by checking IP"""
+        try:
+            # Get current IP without proxy
+            response_direct = requests.get('https://api.ipify.org?format=json', timeout=5)
+            ip_direct = response_direct.json().get('ip', 'Unknown')
+
+            # Get IP through proxy
+            proxychains_cmd = ProxyManager.check_proxychains()
+            if not proxychains_cmd:
+                return False, "Proxychains not found"
+
+            result = subprocess.run(
+                [proxychains_cmd, 'curl', '-s', 'https://api.ipify.org?format=json'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                try:
+                    ip_proxy = json.loads(result.stdout).get('ip', 'Unknown')
+                    if ip_proxy != ip_direct and ip_proxy != 'Unknown':
+                        return True, f"Direct IP: {ip_direct} | Proxy IP: {ip_proxy}"
+                    else:
+                        return False, "Proxy IP same as direct IP or unknown"
+                except json.JSONDecodeError:
+                    return False, "Failed to parse proxy response"
+            else:
+                return False, f"Proxy test failed: {result.stderr}"
+        except Exception as e:
+            return False, f"Proxy test error: {str(e)}"
+
+    @staticmethod
+    def get_proxy_status():
+        """Get comprehensive proxy status"""
+        status = {
+            'proxychains_installed': False,
+            'proxychains_binary': None,
+            'tor_running': False,
+            'proxy_working': False,
+            'proxy_test_message': ''
+        }
+
+        # Check proxychains
+        proxychains_bin = ProxyManager.check_proxychains()
+        status['proxychains_installed'] = proxychains_bin is not None
+        status['proxychains_binary'] = proxychains_bin
+
+        # Check Tor
+        status['tor_running'] = ProxyManager.check_tor()
+
+        # Test proxy if both are available
+        if status['proxychains_installed'] and status['tor_running']:
+            status['proxy_working'], status['proxy_test_message'] = ProxyManager.test_proxy_connection()
+
+        return status
+
+    @staticmethod
+    def enable_proxy():
+        """Enable proxy for scans with validation"""
+        global USE_PROXY
+
+        print(f"\n{Fore.CYAN}[*] Checking proxy configuration...{Style.RESET_ALL}")
+        status = ProxyManager.get_proxy_status()
+
+        # Check proxychains
+        if not status['proxychains_installed']:
+            print(f"{Fore.RED}[!] Proxychains is not installed!{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}[*] Please run the installation script with: sudo bash install_recon_tools.sh{Style.RESET_ALL}")
+            return False
+
+        print(f"{Fore.GREEN}[+] Proxychains found: {status['proxychains_binary']}{Style.RESET_ALL}")
+
+        # Check Tor
+        if not status['tor_running']:
+            print(f"{Fore.RED}[!] Tor service is not running!{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}[*] Start Tor with: sudo systemctl start tor{Style.RESET_ALL}")
+            return False
+
+        print(f"{Fore.GREEN}[+] Tor service is running{Style.RESET_ALL}")
+
+        # Test proxy connection
+        print(f"{Fore.CYAN}[*] Testing proxy connection...{Style.RESET_ALL}")
+        if status['proxy_working']:
+            print(f"{Fore.GREEN}[+] Proxy is working!{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}[*] {status['proxy_test_message']}{Style.RESET_ALL}")
+            USE_PROXY = True
+            return True
+        else:
+            print(f"{Fore.RED}[!] Proxy test failed: {status['proxy_test_message']}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}[*] Cannot enable proxy mode{Style.RESET_ALL}")
+            return False
+
+    @staticmethod
+    def disable_proxy():
+        """Disable proxy for scans"""
+        global USE_PROXY
+        USE_PROXY = False
+        print(f"{Fore.YELLOW}[*] Proxy mode disabled{Style.RESET_ALL}")
+
+    @staticmethod
+    def wrap_command(command):
+        """Wrap command with proxychains if proxy is enabled"""
+        global USE_PROXY
+        if USE_PROXY:
+            proxychains_bin = ProxyManager.check_proxychains()
+            if proxychains_bin:
+                return [proxychains_bin, '-q'] + command
+        return command
+
+    @staticmethod
+    def get_requests_proxies():
+        """Get proxy configuration for requests library"""
+        global USE_PROXY
+        if USE_PROXY and ProxyManager.check_tor():
+            return {
+                'http': 'socks5h://127.0.0.1:9050',
+                'https': 'socks5h://127.0.0.1:9050'
+            }
+        return None
+
 class SecurityTrails:
     def __init__(self, api_key):
         self.api_key = api_key
@@ -76,7 +236,8 @@ class SecurityTrails:
     def get_subdomains(self, domain):
         endpoint = f"{self.base_url}/domain/{domain}/subdomains"
         try:
-            response = requests.get(endpoint, headers=self.headers)
+            proxies = ProxyManager.get_requests_proxies()
+            response = requests.get(endpoint, headers=self.headers, proxies=proxies, timeout=30)
             if response.status_code == 200:
                 data = response.json()
                 return [f"{sub}.{domain}" for sub in data.get("subdomains", [])]
@@ -288,10 +449,11 @@ class UltimateTechDetector:
 
     def detect_technologies(self):
         try:
-            response = requests.get(self.url, headers=self.headers, timeout=10)
-            
+            proxies = ProxyManager.get_requests_proxies()
+            response = requests.get(self.url, headers=self.headers, proxies=proxies, timeout=30)
+
             detected_tech = {}
-            
+
             # Basic header information
             detected_tech['Basic Headers'] = {
                 'Server': response.headers.get('Server', 'Not detected'),
@@ -372,7 +534,8 @@ class VirusTotalScanner:
         """
         try:
             params = {'apikey': self.api_key, 'resource': url}
-            response = requests.get(f'{self.base_url}url/{operation}', params=params)
+            proxies = ProxyManager.get_requests_proxies()
+            response = requests.get(f'{self.base_url}url/{operation}', params=params, proxies=proxies, timeout=30)
             return self._handle_vt_response(response, operation)
         except Exception as e:
             print(f"[-] VirusTotal URL {operation} error: {e}")
@@ -383,20 +546,23 @@ class VirusTotalScanner:
         Process file-based operations (scan or report)
         """
         try:
+            proxies = ProxyManager.get_requests_proxies()
             if operation == 'scan':
                 with open(file_path, 'rb') as f:
                     response = requests.post(
                         f'{self.base_url}file/scan',
                         files={'file': f},
-                        params={'apikey': self.api_key}
+                        params={'apikey': self.api_key},
+                        proxies=proxies,
+                        timeout=60
                     )
             else:  # report
                 file_hash = FileHashCollector.collect_file_hash(file_path)
                 if not file_hash:
                     return None
                 params = {'apikey': self.api_key, 'resource': file_hash}
-                response = requests.get(f'{self.base_url}file/report', params=params)
-            
+                response = requests.get(f'{self.base_url}file/report', params=params, proxies=proxies, timeout=30)
+
             return self._handle_vt_response(response, f"file {operation}")
         except Exception as e:
             print(f"[-] VirusTotal file {operation} error: {e}")
@@ -480,28 +646,42 @@ class DNSEnumerator:
 
 def run_amass(domain):
     try:
-        print("[*] Running Amass...")
-        result = subprocess.run(["amass", "enum", "-d", domain], 
-                              capture_output=True, text=True)
+        global USE_PROXY
+        proxy_status = "[via Proxy]" if USE_PROXY else ""
+        print(f"[*] Running Amass {proxy_status}...")
+
+        command = ProxyManager.wrap_command(["amass", "enum", "-d", domain])
+        result = subprocess.run(command, capture_output=True, text=True, timeout=300)
         subdomains = result.stdout.strip().split('\n')
         return [sub for sub in subdomains if sub]
+    except subprocess.TimeoutExpired:
+        print(f"[-] Amass timed out after 300 seconds")
+        return []
     except Exception as e:
         print(f"[-] Amass error: {e}")
         return []
 
 def run_assetfinder(domain):
     try:
-        print("[*] Running Assetfinder...")
-        result = subprocess.run(["assetfinder", "--subs-only", domain], 
-                                capture_output=True, text=True)
+        global USE_PROXY
+        proxy_status = "[via Proxy]" if USE_PROXY else ""
+        print(f"[*] Running Assetfinder {proxy_status}...")
+
+        command = ProxyManager.wrap_command(["assetfinder", "--subs-only", domain])
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
         subdomains = result.stdout.strip().split('\n')
         return [sub for sub in subdomains if sub]
+    except subprocess.TimeoutExpired:
+        print(f"[-] Assetfinder timed out after 120 seconds")
+        return []
     except Exception as e:
         print(f"[-] Assetfinder error: {e}")
         return []
 
 
 def print_banner():
+    global USE_PROXY
+    proxy_indicator = f"{Fore.GREEN}[PROXY: ON]{Style.RESET_ALL}" if USE_PROXY else f"{Fore.RED}[PROXY: OFF]{Style.RESET_ALL}"
     banner = f"""
 {Fore.CYAN}╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
@@ -514,17 +694,21 @@ def print_banner():
 ║                    SCANNER                                   ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
-{Fore.GREEN}                    By Anubhav Mohandas                        
-{Fore.YELLOW}     [ARM-Optimized Reconnaissance Tool - {platform.machine()}]     
+{Fore.GREEN}                    By Anubhav Mohandas
+{Fore.YELLOW}     [ARM-Optimized Reconnaissance Tool - {platform.machine()}]
+{Fore.CYAN}                     {proxy_indicator}
 {Style.RESET_ALL}"""
     print(banner)
 
 def print_menu():
+    global USE_PROXY
+    proxy_option = f"{Fore.CYAN}[3]{Fore.RESET} Disable Proxy" if USE_PROXY else f"{Fore.CYAN}[3]{Fore.RESET} Enable Proxy"
     menu = f"""
 {Fore.YELLOW}[*] Main Menu:
 {Fore.CYAN}[1]{Fore.RESET} Automate Process
 {Fore.CYAN}[2]{Fore.RESET} Manual Process
-{Fore.CYAN}[3]{Fore.RESET} Exit
+{proxy_option}
+{Fore.CYAN}[4]{Fore.RESET} Exit
 {Style.RESET_ALL}"""
     print(menu)
 
@@ -666,7 +850,8 @@ def fetch_http_headers(domain):
         headers = {
             'User-Agent': f'ReconTool/2.0 ({platform.system()}; {platform.machine()})'
         }
-        response = requests.get(url, timeout=SOCKET_TIMEOUT, headers=headers)
+        proxies = ProxyManager.get_requests_proxies()
+        response = requests.get(url, timeout=30, headers=headers, proxies=proxies)
         print("[+] HTTP Headers:")
         for header, value in response.headers.items():
             print(f"  {header}: {value}")
@@ -1211,6 +1396,7 @@ def print_final_summary(all_results):
         
 
 def main():
+    global USE_PROXY
     print_banner()
     api_keys = APIKeyManager.load_api_keys()
 
@@ -1220,15 +1406,24 @@ def main():
 
         if choice == "1":  # Automate Process
             automated_process(api_keys)
-        
+
         elif choice == "2":  # Manual Process
             manual_process(api_keys)
-        
-        elif choice == "3":  # Exit
-            os.system('clear')  # Clear the terminal screen
+
+        elif choice == "3":  # Toggle Proxy
+            if USE_PROXY:
+                ProxyManager.disable_proxy()
+            else:
+                ProxyManager.enable_proxy()
+            # Refresh banner to show updated proxy status
+            os.system('cls' if os.name == 'nt' else 'clear')
+            print_banner()
+
+        elif choice == "4":  # Exit
+            os.system('cls' if os.name == 'nt' else 'clear')
             print(f"{Fore.GREEN}[*] Exiting Recon Tool. Goodbye!{Style.RESET_ALL}")
             break
-        
+
         else:
             print(f"{Fore.RED}[-] Invalid choice. Please try again.{Style.RESET_ALL}")
 

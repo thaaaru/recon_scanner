@@ -107,14 +107,104 @@ install_python_packages() {
    pip3 install python-whois dnspython requests colorama \
                beautifulsoup4 prettytable psutil \
                python-nmap wappalyzer pyOpenSSL \
-               ipwhois
+               ipwhois PySocks
    echo -e "${GREEN}[+] Python packages installed successfully!${NC}"
+}
+
+# Function to install Tor
+install_tor() {
+   echo -e "${YELLOW}[*] Installing Tor...${NC}"
+
+   if [ "$PACKAGE_MANAGER" == "apt" ]; then
+      $PACKAGE_MANAGER install -y tor
+   elif [ "$PACKAGE_MANAGER" == "yum" ] || [ "$PACKAGE_MANAGER" == "dnf" ]; then
+      $PACKAGE_MANAGER install -y tor
+   fi
+
+   # Enable and start Tor service
+   systemctl enable tor
+   systemctl start tor
+
+   # Wait for Tor to start
+   sleep 3
+
+   if systemctl is-active --quiet tor; then
+      echo -e "${GREEN}[+] Tor installed and started successfully!${NC}"
+   else
+      echo -e "${RED}[!] Tor installation succeeded but service failed to start${NC}"
+      echo -e "${YELLOW}[*] You may need to start it manually: sudo systemctl start tor${NC}"
+   fi
+}
+
+# Function to install and configure proxychains
+install_proxychains() {
+   echo -e "${YELLOW}[*] Installing proxychains...${NC}"
+
+   if [ "$PACKAGE_MANAGER" == "apt" ]; then
+      $PACKAGE_MANAGER install -y proxychains4
+      PROXYCHAINS_BIN="proxychains4"
+      PROXYCHAINS_CONF="/etc/proxychains4.conf"
+   elif [ "$PACKAGE_MANAGER" == "yum" ] || [ "$PACKAGE_MANAGER" == "dnf" ]; then
+      $PACKAGE_MANAGER install -y proxychains-ng
+      PROXYCHAINS_BIN="proxychains4"
+      PROXYCHAINS_CONF="/etc/proxychains.conf"
+   fi
+
+   if command -v $PROXYCHAINS_BIN &> /dev/null || command -v proxychains &> /dev/null; then
+      echo -e "${GREEN}[+] Proxychains installed successfully!${NC}"
+
+      # Configure proxychains for Tor
+      echo -e "${YELLOW}[*] Configuring proxychains for Tor...${NC}"
+
+      # Find the correct config file
+      if [ -f "/etc/proxychains4.conf" ]; then
+         PROXYCHAINS_CONF="/etc/proxychains4.conf"
+      elif [ -f "/etc/proxychains.conf" ]; then
+         PROXYCHAINS_CONF="/etc/proxychains.conf"
+      else
+         echo -e "${RED}[!] Proxychains config file not found${NC}"
+         return 1
+      fi
+
+      # Backup original config
+      cp $PROXYCHAINS_CONF ${PROXYCHAINS_CONF}.backup
+
+      # Configure proxychains
+      cat > $PROXYCHAINS_CONF << 'PROXYCONF'
+# Proxychains configuration for Recon Scanner
+# Configured to use Tor SOCKS5 proxy
+
+# Quiet mode (less output)
+quiet_mode
+
+# Dynamic chain (goes through all proxies in list, if one is down, goes to next)
+dynamic_chain
+
+# Proxy DNS requests
+proxy_dns
+
+# Timeout in seconds
+tcp_read_time_out 15000
+tcp_connect_time_out 8000
+
+# ProxyList format:
+# type  host  port [user pass]
+[ProxyList]
+# Tor SOCKS5 proxy
+socks5 127.0.0.1 9050
+PROXYCONF
+
+      echo -e "${GREEN}[+] Proxychains configured for Tor!${NC}"
+      echo -e "${BLUE}[*] Proxychains config: ${PROXYCHAINS_CONF}${NC}"
+   else
+      echo -e "${RED}[!] Proxychains installation failed${NC}"
+   fi
 }
 
 # Function to install additional reconnaissance tools
 install_extra_tools() {
    echo -e "${YELLOW}[*] Installing additional reconnaissance tools...${NC}"
-   
+
    # Install Nmap
    $PACKAGE_MANAGER install -y nmap
 
@@ -212,6 +302,12 @@ main() {
    # Install additional reconnaissance tools
    install_extra_tools
 
+   # Install Tor
+   install_tor
+
+   # Install and configure proxychains
+   install_proxychains
+
    # Setup API keys configuration
    setup_api_keys
 
@@ -221,6 +317,8 @@ main() {
    echo -e "${GREEN}[+] ReconTool installation complete!${NC}"
    echo -e "${BLUE}[*] You can now run the ReconTool from any directory using the ${NC}recon${BLUE} command${NC}"
    echo -e "${YELLOW}[*] Don't forget to add your API keys in ${API_KEYS_FILE}${NC}"
+   echo -e "${BLUE}[*] Tor and Proxychains have been configured for anonymous scanning${NC}"
+   echo -e "${YELLOW}[*] Verify Tor is running: ${NC}sudo systemctl status tor"
 }
 
 # Run the main installation function
