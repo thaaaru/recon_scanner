@@ -75,26 +75,47 @@ test_ip_leak() {
 test_dns_leak() {
     log_info "Test 2/2: DNS Leak Detection"
 
-    # Test DNS resolution through Tor
+    # Test DNS resolution through Tor using multiple methods
     log_info "Testing DNS resolution through Tor..."
 
-    # Fetch via Tor (DNS should be proxied)
-    local tor_response=""
-    tor_response=$(curl --socks5-hostname 127.0.0.1:9050 -s --connect-timeout "${TIMEOUT}" "${DNS_TEST_URL}" 2>/dev/null || echo "")
+    # Try multiple DNS test endpoints (some may block Tor)
+    local dns_test_urls=(
+        "https://icanhazip.com"
+        "${DNS_TEST_URL}"
+        "https://api.ipify.org"
+    )
 
+    local tor_response=""
+    local test_url=""
+
+    # Try each URL until one succeeds
+    for url in "${dns_test_urls[@]}"; do
+        log_info "Attempting DNS test with: ${url}"
+        tor_response=$(curl --socks5-hostname 127.0.0.1:9050 -s --connect-timeout "${TIMEOUT}" "${url}" 2>/dev/null || echo "")
+
+        if [ -n "${tor_response}" ]; then
+            test_url="${url}"
+            log_success "DNS resolution through Tor successful: ${tor_response}"
+            break
+        else
+            log_warn "Failed to resolve ${url} through Tor, trying next..."
+        fi
+    done
+
+    # If all URLs failed, report error
     if [ -z "${tor_response}" ]; then
-        log_error "Failed to resolve DNS through Tor"
-        log_error "DNS may be leaking or Tor proxy not working"
+        log_error "Failed to resolve DNS through Tor (tried ${#dns_test_urls[@]} endpoints)"
+        log_error "This may indicate:"
+        log_error "  - Tor SOCKS proxy DNS resolution issue"
+        log_error "  - All test endpoints blocking Tor exit nodes"
+        log_error "  - Network connectivity problem"
         return 1
     fi
 
-    log_success "DNS resolution through Tor: ${tor_response}"
-
-    # Verify it's a Tor exit node IP (should be different from container IP)
-    # Additional check: try to fetch without socks proxy - should fail or timeout
+    # Verify DNS isolation by checking direct connection is blocked
     log_info "Verifying DNS isolation..."
     local direct_dns=""
-    direct_dns=$(timeout 5 curl -s --connect-timeout 3 "${DNS_TEST_URL}" 2>/dev/null || echo "TIMEOUT")
+    direct_dns=$(timeout 5 curl -s --connect-timeout 3 "${test_url}" 2>/dev/null || echo "TIMEOUT")
 
     if [ "${direct_dns}" != "TIMEOUT" ] && [ -n "${direct_dns}" ]; then
         # If we can fetch directly, compare with Tor result
@@ -104,8 +125,9 @@ test_dns_leak() {
             return 1
         fi
         log_info "Direct DNS (non-Tor): ${direct_dns}"
+        log_warn "Warning: Direct DNS resolution succeeded (network not fully isolated)"
     else
-        log_info "Direct DNS connection: TIMEOUT (expected)"
+        log_success "Direct DNS connection: TIMEOUT (properly isolated)"
     fi
 
     log_success "DNS leak test PASSED"

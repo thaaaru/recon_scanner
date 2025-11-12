@@ -26,7 +26,7 @@ The installation script automatically installs and configures Tor and Proxychain
 
 ```bash
 # Clone the repository
-git clone https://github.com/anubhavmohandas/recon_scanner.git
+git clone https://github.com/thaaaru/recon_scanner.git
 cd recon_scanner
 
 # Run installation script
