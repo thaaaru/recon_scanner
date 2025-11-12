@@ -1,0 +1,12 @@
+# Target list for batch scanning
+# One domain/IP per line
+# Lines starting with # are ignored
+
+# Example targets (replace with authorized targets)
+example.com
+testphp.vulnweb.com
+
+# You can add IPs too
+# 192.168.1.1
+
+# Only scan systems you have permission to test!

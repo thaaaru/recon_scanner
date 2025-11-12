@@ -32,6 +32,7 @@ COPY --chown=scanner:scanner proxychains.conf /etc/proxychains4.conf
 COPY --chown=scanner:scanner --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=scanner:scanner --chmod=755 check_leak.sh /usr/local/bin/check_leak.sh
 COPY --chown=scanner:scanner --chmod=755 scan_wrapper.sh /usr/local/bin/scan_wrapper.sh
+COPY --chown=scanner:scanner --chmod=755 internal_scan.sh /usr/local/bin/internal_scan.sh
 
 # Configure Tor for container use
 RUN echo "DataDirectory /home/scanner/.tor" >> /etc/tor/torrc && \
